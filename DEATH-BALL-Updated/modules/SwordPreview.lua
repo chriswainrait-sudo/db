@@ -5,13 +5,14 @@ if swordPreviewEnv.PRIME_SWORD_PREVIEW then
 end
 
 local function createSwordPreview()
-    local state = { Active = true }
+    local state = { Active = true, Updates = 0 }
     local ui, page, assets, catalog, inventoryApi, grid, cardClass
+    local modern, category
     local records, cards, patches, connections, hidden = {}, {}, {}, {}, {}
     local model, selected, offset, folder, sourceSword
     local folderConnection, renderConnection
     local function inventoryData()
-        return inventoryApi and inventoryApi:Get() or ui.Inventory
+        return inventoryApi and inventoryApi:Get() or ui and ui.Inventory or {}
     end
     local function refreshPage()
         if grid then
@@ -19,6 +20,15 @@ local function createSwordPreview()
         else
             page:GetInvTable()
             page:CreateAndFilterSortedList(true)
+        end
+    end
+
+    local function refreshControls()
+        if modern then
+            page:RefreshEquippedMarks()
+            page:UpdateEquipButton()
+        else
+            page:UpdateUI()
         end
     end
 
@@ -137,35 +147,165 @@ local function createSwordPreview()
                 end
             end
         end)
-        page:UpdateUI()
+        refreshControls()
+    end
+
+    local function installModern()
+        local sourceKey = category.Config.InventoryKey or "Swords"
+        local updateGrid = grid.Update
+        patch(grid, "Update", function(object, ...)
+            state.Updates = state.Updates + 1
+            local result = table.pack(pcall(updateGrid, object, ...))
+            state.Updates = state.Updates - 1
+            if state.PendingDestroy and state.Updates == 0 then state:Destroy() end
+            if not result[1] then error(result[2], 0) end
+            return table.unpack(result, 2, result.n)
+        end)
+        local getSource = grid.GetItemSource
+        patch(grid, "GetItemSource", function(object, ...)
+            local source = table.clone(getSource(object, ...))
+            if state.Active then
+                source[sourceKey] = table.clone(source[sourceKey] or {})
+                for id, data in pairs(records) do source[sourceKey][id] = data end
+            end
+            return source
+        end)
+        local createItem = grid.CreateItem
+        patch(grid, "CreateItem", function(object, id, data, ...)
+            local previewData = records[id]
+            if previewData and not state.Active then return nil end
+            local card = createItem(object, id, data, ...)
+            if card and previewData then
+                if not state.Active then
+                    pcall(card.Destroy, card)
+                    task.defer(function()
+                        if object._skipped then object._skipped[id] = nil end
+                    end)
+                    return nil
+                end
+                cards[id] = card
+                card.UpdateData = function(current) current.Data = previewData end
+                card.NotLocal = true
+                card.GetEquipped = function() return selected == id end
+                card:UpdateEquipped()
+            end
+            return card
+        end)
+        local getName = page.GetItemNameFromId
+        patch(page, "GetItemNameFromId", function(object, config, id, ...)
+            if state.Active and config and config.InventoryKey == sourceKey and records[id] then
+                return records[id].Type
+            end
+            return getName(object, config, id, ...)
+        end)
+        local updateEquip = page.UpdateEquipButton
+        patch(page, "UpdateEquipButton", function(object, ...)
+            local active = object.ActiveCategory
+            local card = active and active.SelectedClass
+            if state.Active and active == category and card and records[card.Id] then
+                object:SetEquipButton(selected == card.Id and "Unequip preview" or "Equip preview", true, "Local visual preview only")
+                return
+            end
+            return updateEquip(object, ...)
+        end)
+        local equipItem = page.Equip
+        patch(page, "Equip", function(object, config, id, ...)
+            if config and config.InventoryKey == sourceKey then
+                if state.Active and records[id] then
+                    if selected == id then
+                        clearModel()
+                        refreshControls()
+                    else
+                        local ok, failure = pcall(equip, id)
+                        if not ok then
+                            NexusUI:Notify({ Title = "Sword preview", Content = tostring(failure), Duration = 5 })
+                        end
+                    end
+                    return
+                end
+                clearModel()
+                refreshControls()
+            end
+            return equipItem(object, config, id, ...)
+        end)
+        local updateLock = page.UpdateLockButton
+        patch(page, "UpdateLockButton", function(object, ...)
+            if state.Active and object.InfoConfig and object.InfoConfig.InventoryKey == sourceKey and records[object.InfoId] then
+                object.LockButton.Object.Visible = false
+                object:UpdateFooter()
+                return
+            end
+            return updateLock(object, ...)
+        end)
+        local toggleLock = page.ToggleLockSelected
+        patch(page, "ToggleLockSelected", function(object, ...)
+            if state.Active and object.InfoConfig and object.InfoConfig.InventoryKey == sourceKey and records[object.InfoId] then return end
+            return toggleLock(object, ...)
+        end)
     end
 
     function state:Destroy()
-        if not self.Active then return end
+        if self.CleanupComplete then return end
         self.Active = false
+        self.Stopping = true
+        if self.Updates > 0 then
+            self.PendingDestroy = true
+            clearModel()
+            return
+        end
+        local thread = self.Thread
+        if type(thread) == "thread" and thread ~= coroutine.running() and coroutine.status(thread) ~= "dead" then
+            pcall(task.cancel, thread)
+        end
         clearModel()
         if folderConnection then folderConnection:Disconnect(); folderConnection = nil end
         for _, connection in ipairs(connections) do connection:Disconnect() end
-        local previewSelected = page and records[page.SelectedId] ~= nil
+        local previewSelected = page and not modern and records[page.SelectedId] ~= nil
+        if modern and page then
+            if category.SelectedClass and records[category.SelectedClass.Id] then category.SelectedClass = nil end
+            if records[page.InfoId] then page.InfoId, page.InfoConfig = nil, nil end
+        end
         for i = #patches, 1, -1 do
             local entry = patches[i]
-            if entry[1][entry[2]] == entry[4] then entry[1][entry[2]] = entry[3] end
+            pcall(function()
+                if entry[1][entry[2]] == entry[4] then entry[1][entry[2]] = entry[3] end
+            end)
         end
-        for id, card in pairs(cards) do
-            if grid then
-                if grid.AllClasses[id] == card then
-                    grid.AllClasses[id] = nil
-                    grid._itemTypeOf[id] = nil
-                    grid.maid["item_" .. id] = nil
-                end
-            else
-                if page and page.AllItems[id] and page.AllItems[id].Class == card then
-                    page.AllItems[id] = nil
-                end
-                pcall(function() card:Destroy() end)
+        if modern and grid then pcall(grid.Update, grid, true) end
+        if grid then
+            for id in pairs(records) do
+                if grid._skipped then grid._skipped[id] = nil end
+                if grid._itemTypeOf then grid._itemTypeOf[id] = nil end
             end
         end
-        if page then
+        for id, card in pairs(cards) do
+            pcall(function()
+                if grid then
+                    if grid.AllClasses[id] == card then
+                        grid.AllClasses[id] = nil
+                        grid._itemTypeOf[id] = nil
+                        grid.maid["item_" .. id] = nil
+                    end
+                else
+                    if page and page.AllItems[id] and page.AllItems[id].Class == card then
+                        page.AllItems[id] = nil
+                    end
+                    pcall(function() card:Destroy() end)
+                end
+                if modern and card.Destroy then card:Destroy() end
+            end)
+        end
+        if modern and page then
+            pcall(function()
+                if page.ActiveCategory == category then
+                    page:ClearStage()
+                    page:SelectDefault(category)
+                    page:UpdateEmptyState()
+                    page:UpdateLockButton()
+                    page:UpdateEquipButton()
+                end
+            end)
+        elseif page then
             if previewSelected then
                 page.SelectedId = (inventoryData().EquippedSwords or {})[1] or ""
                 page._previousClass = nil
@@ -179,30 +319,57 @@ local function createSwordPreview()
         if swordPreviewEnv.PRIME_SWORD_PREVIEW == self then swordPreviewEnv.PRIME_SWORD_PREVIEW = nil end
         table.clear(cards)
         table.clear(records)
+        self.CleanupComplete = true
     end
 
     function state:Start()
+        local previous = self.Previous
+        while previous and previous.Stopping and not previous.CleanupComplete do
+            if not self.Active then return end
+            task.wait()
+        end
         ui = PrimeRuntime.Require(ReplicatedFirst:WaitForChild("ui", 15))
+        if not self.Active then return end
         local core = ReplicatedFirst:FindFirstChild("Core")
         local invModule = core and core:FindFirstChild("Inventory")
-        if invModule and ui.RegisteredPages then inventoryApi = PrimeRuntime.Require(invModule) end
+        if invModule then inventoryApi = PrimeRuntime.Require(invModule) end
+        if not self.Active then return end
+        local pageFolder = ui.PlayerGui and ui.PlayerGui:FindFirstChild("PAGES")
+        local expectModern = pageFolder and pageFolder:FindFirstChild("InventoryPreviewPage") ~= nil
         local deadline = os.clock() + 30
+        local ready = false
         repeat
             if not self.Active then return end
-            local pages = ui.RegisteredPages or ui.AllUI or {}
-            local inventory = pages.InventoryPage
-            page = inventory and inventory.AllPages and inventory.AllPages.Swords
-            page = page or pages.SwordPage
-            if page and page.EquipButton and page._focusDisplay and (page.Grid or page._isReadyToSort) then break end
+            local registered, legacy = ui.RegisteredPages or {}, ui.AllUI or {}
+            local preview = registered.InventoryPreviewPage or legacy.InventoryPreviewPage
+            if preview then expectModern = true end
+            local swords = preview and preview.Categories and preview.Categories.Swords
+            if swords and swords.Grid and preview.EquipButton and type(preview.Equip) == "function" then
+                page, category, modern = preview, swords, true
+                ready = true
+                break
+            end
+            if not expectModern then
+                local inventory = registered.InventoryPage or legacy.InventoryPage
+                page = inventory and inventory.AllPages and inventory.AllPages.Swords
+                page = page or registered.SwordPage or legacy.SwordPage
+                if page and page.EquipButton and page._focusDisplay and (page.Grid or page._isReadyToSort) then
+                    ready = true
+                    break
+                end
+            end
             task.wait(0.1)
         until os.clock() >= deadline
-        assert(page and page.EquipButton and page._focusDisplay and (page.Grid or page._isReadyToSort), "Sword inventory is not ready")
+        assert(ready, "Sword inventory is not ready")
         if not self.Active then return end
         assets = ReplicatedStorage.Assets.Swords
         catalog = PrimeRuntime.Require(ReplicatedStorage.DataBins.SwordData)
         assert(type(inventoryData().Swords) == "table", "Sword inventory is unavailable")
-        grid = page.Grid
-        if grid then
+        if not self.Active then return end
+        grid = modern and category.Grid or page.Grid
+        if modern then
+            installModern()
+        elseif grid then
             cardClass = PrimeRuntime.Require(ui.Injected:WaitForChild("SwordGridButton", 15))
             local getSource = grid.GetItemSource
             patch(grid, "GetItemSource", function(object, ...)
@@ -222,52 +389,55 @@ local function createSwordPreview()
             end)
         end
 
-        local updateUI = page.UpdateUI
-        patch(page, "UpdateUI", function(object, ...)
-            if records[object.SelectedId] then
-                object.LockButton.Object.Visible = false
-                object.EquipButton.Object.Visible = true
-                object.EquipButton.CanUse = true
-                object.EquipButton.Object.AutoButtonColor = true
-                object.EquipButton.Object.BackgroundColor3 = ui.Palette.Colors.Green
-                object.EquipButton.Object.TextLabel.TextColor3 = ui.Palette.Colors.Black
-                object.EquipButton.Object.TextLabel.Text = selected == object.SelectedId and "Unequip preview" or "Equip preview"
-                return
-            end
-            return updateUI(object, ...)
-        end)
-        local updateFocus = page._focusDisplay.Update
-        patch(page._focusDisplay, "Update", function(object, card, ...)
-            updateFocus(object, card, ...)
-            if card and records[card.Id] and object.CurrentClass then
-                local data = records[card.Id]
-                object.CurrentClass.UpdateData = function(current) current.Data = data end
-                object.CurrentClass.NotLocal = true
-            end
-        end)
-        local equipFunction = page.EquipButton.Function
-        patch(page.EquipButton, "Function", function(...)
-            if not self.Active then return end
-            local id = page.SelectedId
-            if records[id] then
-                if selected == id then
-                    clearModel()
-                    page:UpdateUI()
-                else
-                    local ok, err = pcall(equip, id)
-                    if not ok then
-                        NexusUI:Notify({ Title = "Sword preview", Content = tostring(err), Duration = 5 })
-                    end
+        if not modern then
+            local updateUI = page.UpdateUI
+            patch(page, "UpdateUI", function(object, ...)
+                if records[object.SelectedId] then
+                    object.LockButton.Object.Visible = false
+                    object.EquipButton.Object.Visible = true
+                    object.EquipButton.CanUse = true
+                    object.EquipButton.Object.AutoButtonColor = true
+                    object.EquipButton.Object.BackgroundColor3 = ui.Palette.Colors.Green
+                    object.EquipButton.Object.TextLabel.TextColor3 = ui.Palette.Colors.Black
+                    object.EquipButton.Object.TextLabel.Text = selected == object.SelectedId and "Unequip preview" or "Equip preview"
+                    return
                 end
-                return
-            end
-            clearModel()
-            return equipFunction(...)
-        end)
-        local lockFunction = page.LockButton.Function
-        patch(page.LockButton, "Function", function(...)
-            if self.Active and not records[page.SelectedId] then return lockFunction(...) end
-        end)
+                return updateUI(object, ...)
+            end)
+            local updateFocus = page._focusDisplay.Update
+            patch(page._focusDisplay, "Update", function(object, card, ...)
+                updateFocus(object, card, ...)
+                if card and records[card.Id] and object.CurrentClass then
+                    local data = records[card.Id]
+                    object.CurrentClass.UpdateData = function(current) current.Data = data end
+                    object.CurrentClass.NotLocal = true
+                end
+            end)
+            local equipFunction = page.EquipButton.Function
+            patch(page.EquipButton, "Function", function(...)
+                if not self.Active then return end
+                local id = page.SelectedId
+                if records[id] then
+                    if selected == id then
+                        clearModel()
+                        page:UpdateUI()
+                    else
+                        local ok, err = pcall(equip, id)
+                        if not ok then
+                            NexusUI:Notify({ Title = "Sword preview", Content = tostring(err), Duration = 5 })
+                        end
+                    end
+                    return
+                end
+                clearModel()
+                return equipFunction(...)
+            end)
+            local lockFunction = page.LockButton.Function
+            patch(page.LockButton, "Function", function(...)
+                if self.Active and not records[page.SelectedId] then return lockFunction(...) end
+            end)
+
+        end
 
         bindFolder(Workspace:FindFirstChild(LocalPlayer.Name .. " SwordWelds"))
         connections[#connections + 1] = Workspace.ChildAdded:Connect(function(child)
@@ -278,7 +448,7 @@ local function createSwordPreview()
         end)
         connections[#connections + 1] = LocalPlayer.CharacterRemoving:Connect(function()
             clearModel()
-            if page then pcall(page.UpdateUI, page) end
+            if page then pcall(refreshControls) end
         end)
 
         local owned, names = {}, {}
@@ -294,43 +464,51 @@ local function createSwordPreview()
             if not self.Active then return end
             local id = "PRIME_PREVIEW:" .. name
             local data = { Type = name, Shiny = catalog[name].ShinyOnly == true, CreatedAt = false }
-            local card
-            local props = {
-                Id = id,
-                Data = data,
-                Parent = page,
-                Holder = page.Holder,
-                Function = function()
-                    if not self.Active or not card then return end
-                    page.SelectedId = id
-                    page._focusDisplay:Update(card)
-                    if page._previousClass and page._previousClass.Highlight then
-                        page._previousClass:Highlight(false)
+            records[id] = data
+            if not modern then
+                local card
+                local props = {
+                    Id = id,
+                    Data = data,
+                    Parent = page,
+                    Holder = page.Holder,
+                    Function = function()
+                        if not self.Active or not card then return end
+                        page.SelectedId = id
+                        page._focusDisplay:Update(card)
+                        if page._previousClass and page._previousClass.Highlight then
+                            page._previousClass:Highlight(false)
+                        end
+                        page._previousClass = card
+                        card:Highlight(true)
+                        page:UpdateUI()
                     end
-                    page._previousClass = card
-                    card:Highlight(true)
-                    page:UpdateUI()
+                }
+                card = grid and cardClass(nil, props) or ui:Create("SwordGridButton", nil, props)
+                card.UpdateData = function(object) object.Data = data end
+                card.NotLocal = true
+                records[id], cards[id] = data, card
+                if grid then
+                    card.Grid = grid
+                    grid:_applyCellAspect(card)
+                    grid.AllClasses[id] = card
+                    grid._itemTypeOf[id] = "Swords"
+                    grid.maid["item_" .. id] = card
+                else
+                    page.AllItems[id] = { Class = card, RawObj = card.Raw, Type = "Swords" }
+                    if page.AspectRatioConstraint then page.AspectRatioConstraint:Clone().Parent = card.Raw end
                 end
-            }
-            card = grid and cardClass(nil, props) or ui:Create("SwordGridButton", nil, props)
-            card.UpdateData = function(object) object.Data = data end
-            card.NotLocal = true
-            records[id], cards[id] = data, card
-            if grid then
-                card.Grid = grid
-                grid:_applyCellAspect(card)
-                grid.AllClasses[id] = card
-                grid._itemTypeOf[id] = "Swords"
-                grid.maid["item_" .. id] = card
-            else
-                page.AllItems[id] = { Class = card, RawObj = card.Raw, Type = "Swords" }
-                if page.AspectRatioConstraint then page.AspectRatioConstraint:Clone().Parent = card.Raw end
             end
             if index % 8 == 0 then task.wait() end
         end
         if not self.Active then return end
         refreshPage()
-        page:UpdateUI()
+        if not self.Active then return end
+        if modern and page.ActiveCategory == category then
+            page:UpdateEmptyState()
+            page:SelectDefault(category)
+        end
+        refreshControls()
     end
 
     return state
@@ -348,10 +526,11 @@ Tabs.Main:AddToggle("VisualAllSwords", {
         stopSwordPreview()
         if not value or PrimeRuntime.IsShuttingDown then return end
         local controller = createSwordPreview()
+        controller.Previous = swordPreviewEnv.PRIME_SWORD_PREVIEW
         swordPreview = controller
         swordPreviewEnv.PRIME_SWORD_PREVIEW = controller
-        task.spawn(function()
-            local ok, err = pcall(controller.Start, controller)
+        controller.Thread = task.defer(function()
+            local ok, err = PrimeRuntime.Protect(controller.Start, controller)
             if not ok and controller.Active then
                 controller:Destroy()
                 if swordPreview == controller then
