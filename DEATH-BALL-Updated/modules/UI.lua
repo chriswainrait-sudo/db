@@ -5943,7 +5943,8 @@ StarterGui:SetCore("SendNotification", {
 Tabs = {
     Main = Window:AddTab({Title = "Main"}),
     Rage = Window:AddTab({Title = "Rage"}),
-    Movement = Window:AddTab({Title = "Movement"})
+    Movement = Window:AddTab({Title = "Movement"}),
+    Visual = Window:AddTab({Title = "Visual"})
 }
 
 Tabs.Settings = Window:AddTab({ Title = "Settings"})
