@@ -4072,7 +4072,7 @@ function NexusUI:CreateWindow(options)
             NumberSequenceKeypoint.new(1, 1)
         })
         shine.Parent = glow
-        local spin = TweenService:Create(cr, TweenInfo.new(90, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), {Rotation = 360})
+        local spin = TweenService:Create(cr, TweenInfo.new(30, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), {Rotation = 360})
         local flash = TweenService:Create(shine, TweenInfo.new(3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 9), {Offset = Vector2.new(1.5, 0)})
         spin:Play()
         flash:Play()
