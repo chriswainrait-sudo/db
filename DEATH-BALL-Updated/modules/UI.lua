@@ -4048,26 +4048,35 @@ function NexusUI:CreateWindow(options)
     logoLayout.VerticalAlignment = Enum.VerticalAlignment.Center
     logoLayout.Parent = logoContainer
 
-    local cr = makeLogo(logoContainer,26)
-    cr.Name = "PrimeLogo"
-    cr.LayoutOrder = 1
-    cr.ZIndex = 3
+    local logoSlot = Instance.new("Frame")
+    logoSlot.Name = "LogoSlot"
+    logoSlot.Size = UDim2.fromOffset(26, 26)
+    logoSlot.BackgroundTransparency = 1
+    logoSlot.LayoutOrder, logoSlot.ZIndex = 1, 3
+    logoSlot.Parent = logoContainer
+    local cr = makeLogo(logoSlot, 26)
+    cr.AnchorPoint, cr.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
     do
-        local glow = makeLogo(cr, 30)
+        local glow = makeLogo(cr, 29)
         glow.Name = "LogoSilverGlow"
         glow.AnchorPoint, glow.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
-        glow.ImageColor3, glow.ImageTransparency = Color3.fromRGB(230, 234, 242), 1
-        local elapsed, connection = 0, nil
-        connection = RunService.RenderStepped:Connect(function(dt)
-            if ScriptUnloaded or not cr.Parent then connection:Disconnect() return end
-            elapsed = elapsed + dt
-            cr.Rotation = elapsed * 4 % 360
-            local phase = elapsed % 14
-            local pulse = phase >= 11 and math.sin((phase - 11) / 3 * math.pi) ^ 2 or 0
-            cr.ImageColor3 = Color3.fromRGB(218, 223, 232):Lerp(Color3.new(1, 1, 1), pulse)
-            glow.ImageTransparency = 1 - pulse * 0.35
-        end)
-        TrackGuiConnection(connection)
+        glow.ImageColor3, glow.ImageTransparency = Color3.fromRGB(235, 239, 247), 0.15
+        glow.ZIndex = cr.ZIndex + 1
+        local shine = Instance.new("UIGradient")
+        shine.Rotation, shine.Offset = 25, Vector2.new(-1.5, 0)
+        shine.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.35, 1),
+            NumberSequenceKeypoint.new(0.5, 0),
+            NumberSequenceKeypoint.new(0.65, 1),
+            NumberSequenceKeypoint.new(1, 1)
+        })
+        shine.Parent = glow
+        local spin = TweenService:Create(cr, TweenInfo.new(90, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), {Rotation = 360})
+        local flash = TweenService:Create(shine, TweenInfo.new(3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 9), {Offset = Vector2.new(1.5, 0)})
+        spin:Play()
+        flash:Play()
+        RegisterUnloadCallback(function() spin:Cancel() flash:Cancel() end)
     end
 
     local logoSubtitle = Instance.new("TextLabel")
