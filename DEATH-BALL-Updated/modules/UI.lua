@@ -4052,6 +4052,23 @@ function NexusUI:CreateWindow(options)
     cr.Name = "PrimeLogo"
     cr.LayoutOrder = 1
     cr.ZIndex = 3
+    do
+        local glow = makeLogo(cr, 30)
+        glow.Name = "LogoSilverGlow"
+        glow.AnchorPoint, glow.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
+        glow.ImageColor3, glow.ImageTransparency = Color3.fromRGB(230, 234, 242), 1
+        local elapsed, connection = 0, nil
+        connection = RunService.RenderStepped:Connect(function(dt)
+            if ScriptUnloaded or not cr.Parent then connection:Disconnect() return end
+            elapsed = elapsed + dt
+            cr.Rotation = elapsed * 4 % 360
+            local phase = elapsed % 14
+            local pulse = phase >= 11 and math.sin((phase - 11) / 3 * math.pi) ^ 2 or 0
+            cr.ImageColor3 = Color3.fromRGB(218, 223, 232):Lerp(Color3.new(1, 1, 1), pulse)
+            glow.ImageTransparency = 1 - pulse * 0.35
+        end)
+        TrackGuiConnection(connection)
+    end
 
     local logoSubtitle = Instance.new("TextLabel")
     logoSubtitle.Name = "PrimeSubtitle"
