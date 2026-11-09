@@ -1,6 +1,6 @@
 UIEnvironment = setmetatable({}, {__index = getfenv()})
 local NativeUI = (function()
-local SHOW_LOGO_ON_PC = false
+local SHOW_LOGO_ON_PC = true
 
 return {Exports={"userInputService","TweenService","Players","RunService","ReplicatedStorage","Workspace","StarterGui","GuiService","LocalPlayer","PlayerGui","GetGuiParent","GuiParent","IsMobileDevice","IS_MOBILE","SHOW_RESTORE_BUTTON","NexusUI","ScriptUnloaded","ScriptConnections","UnloadCallbacks","GuiConnections","TrackGuiConnection","TrackScriptConnection","RegisterUnloadCallback","PRIME_TIER","IS_PREMIUM_USER","Clamp","MAIN_WINDOW_TRANSPARENCY","GUI_BUTTON_TRANSPARENCY","GUI_PANEL_TRANSPARENCY","GUI_OVERLAY_TRANSPARENCY","GUI_DISABLED_TRANSPARENCY","ACCENT","COLOR_WINDOW","COLOR_TOPBAR","COLOR_GROUP","COLOR_CONTROL","COLOR_BORDER","COLOR_TEXT","COLOR_TEXT_DIM","COLOR_ON_ACCENT","ApplyButtonStyle","CreateClickButton","ConnectClick","windowSize","Window","Tabs","currentCloseKey","waitingForKey","SettingsSection","keybindRow","keybindRowCorner","keybindTitle","keybindHint","keybindBadge","keybindBadgeCorner","keybindBadgeStroke","keybindBadgeLabel","UpdateKeybindBadge","SetGUIKey","BeginKeyBinding"},Init=function()
 
