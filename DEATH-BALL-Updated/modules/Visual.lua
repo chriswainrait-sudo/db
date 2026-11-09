@@ -255,3 +255,152 @@ TrackRuntimeCleanup(function()
         deathHandler.PlayForSettings = originalDeath
     end
 end)
+
+do
+    local colors = {
+        Cyan = Color3.fromRGB(75, 225, 255),
+        Crimson = Color3.fromRGB(255, 65, 95),
+        Silver = Color3.fromRGB(235, 242, 255),
+    }
+    local selected, connection, flash, generation
+    generation = 0
+    local tweenService = game:GetService("TweenService")
+
+    local function clearFlash()
+        if flash then flash:Destroy(); flash = nil end
+    end
+
+    local function changeEffect(value)
+        generation = generation + 1
+        local token = generation
+        selected = colors[value]
+        clearFlash()
+        if connection then connection:Disconnect(); connection = nil end
+        if not selected or not v.Alive then return end
+
+        task.spawn(function()
+            local ok, failure = PrimeRuntime.Protect(function()
+                local actions = PrimeRuntime.Require(ReplicatedStorage:FindFirstChild("Actions"))
+                if token ~= generation or not v.Alive then return end
+                connection = actions.DEFLECT_RESULT:Connect(function(failed)
+                    if failed or token ~= generation or not v.Alive then return end
+                    local character = LocalPlayer.Character
+                    if not character or not character.Parent then return end
+                    clearFlash()
+                    local effect = Instance.new("Highlight")
+                    effect.Name = "DeathBallParryFlash"
+                    effect.Adornee = character
+                    effect.DepthMode = Enum.HighlightDepthMode.Occluded
+                    effect.FillColor, effect.OutlineColor = selected, selected
+                    effect.FillTransparency, effect.OutlineTransparency = 0.28, 0.05
+                    effect.Parent = character
+                    flash = effect
+                    tweenService:Create(effect, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                        FillTransparency = 1,
+                        OutlineTransparency = 1,
+                    }):Play()
+                    task.delay(0.34, function()
+                        if flash == effect then clearFlash() end
+                    end)
+                end)
+            end)
+            if not ok and token == generation then notify(failure) end
+        end)
+    end
+
+    Tabs.Visual:AddDropdown("VisualHitEffect", {
+        Title = "Hit Effect Changer",
+        Values = {"Default", "Cyan", "Crimson", "Silver"},
+        Default = "Default",
+        Callback = changeEffect,
+    })
+    TrackRuntimeConnection(LocalPlayer.CharacterRemoving:Connect(clearFlash))
+    TrackRuntimeCleanup(function() changeEffect("Default") end)
+end
+
+do
+    local soundService = game:GetService("SoundService")
+    local packages = soundService:FindFirstChild("Packages")
+    local nonPreload = packages and packages:FindFirstChild("NonPreload")
+    local enchants = nonPreload and nonPreload:FindFirstChild("DeflectSounds")
+    local swords = assets:FindFirstChild("Swords")
+    local names = {"Default", "Frost", "Fire", "Wind", "Electric", "Prism", "Deagle", "Uzi", "Fire Dragon Bow"}
+    local sources, impactKeys = {}, {Deflect = true, DeflectImpact = true, DeflectImpactPerfect = true}
+    if enchants then
+        for _, sound in ipairs(enchants:GetChildren()) do
+            if sound:IsA("Sound") then impactKeys[sound.Name] = true end
+        end
+    end
+    for index, name in ipairs(names) do
+        if index >= 2 and index <= 6 then
+            sources[name] = enchants and enchants:FindFirstChild("Deflect" .. name)
+        elseif index >= 7 then
+            local sword = swords and swords:FindFirstChild(name)
+            local sounds = sword and sword:FindFirstChild("Sounds")
+            sources[name] = sounds and sounds:FindFirstChild("Deflect")
+        end
+    end
+
+    local selected, channel, original, wrapper, resultConnection
+    local generation, lastReplacement = 0, -math.huge
+
+    local function changeSound(value)
+        generation = generation + 1
+        local token = generation
+        selected = sources[value]
+        if resultConnection then resultConnection:Disconnect(); resultConnection = nil end
+        if channel and channel.PlayAt == wrapper then channel.PlayAt = original end
+        channel, original, wrapper = nil, nil, nil
+        lastReplacement = -math.huge
+        if not selected or not v.Alive then return end
+
+        task.spawn(function()
+            local ok, failure = PrimeRuntime.Protect(function()
+                local core = ReplicatedFirst:FindFirstChild("Core")
+                local audio = PrimeRuntime.Require(core and core:FindFirstChild("Audio"))
+                local actions = PrimeRuntime.Require(ReplicatedStorage:FindFirstChild("Actions"))
+                if token ~= generation or not v.Alive then return end
+                local gameplay, replacement = audio.Gameplay, selected
+                local playAt = gameplay.PlayAt
+                local function playReplacement(object, position, ...)
+                    lastReplacement = os.clock()
+                    return playAt(object, replacement, position, ...)
+                end
+                local function replaceImpact(object, source, position, ...)
+                    local character = LocalPlayer.Character
+                    local key = typeof(source) == "Instance" and source.Name or source
+                    if object == gameplay and impactKeys[key] and character and typeof(position) == "Instance"
+                        and position:IsDescendantOf(character) then
+                        return playReplacement(object, position, ...)
+                    end
+                    return playAt(object, source, position, ...)
+                end
+                gameplay.PlayAt = replaceImpact
+                channel, original, wrapper = gameplay, playAt, replaceImpact
+
+                resultConnection = actions.DEFLECT_RESULT:Connect(function(failed)
+                    if failed or token ~= generation or not v.Alive then return end
+                    local character = LocalPlayer.Character
+                    local root = character and character:FindFirstChild("HumanoidRootPart")
+                    local confirmedAt = os.clock()
+                    if not root or confirmedAt - lastReplacement < 0.12 then return end
+                    task.delay(0.06, function()
+                        if token == generation and v.Alive and root.Parent == character
+                            and lastReplacement < confirmedAt then
+                            playReplacement(gameplay, root)
+                        end
+                    end)
+                end)
+            end)
+            if not ok and token == generation then notify(failure) end
+        end)
+    end
+
+    Tabs.Visual:AddDropdown("VisualParrySound", {
+        Title = "Parry Sound",
+        Values = names,
+        Default = "Default",
+        Callback = changeSound,
+    })
+    TrackRuntimeCleanup(function() changeSound("Default") end)
+end
