@@ -57,8 +57,8 @@ local function createCombatController()
         SpamEnemyDistance = 18.2,
         SpamExitDistance = 22,
         SpamTargetGrace = 0.18,
-        SpamMinInterval = 0.025,
-        SpamMaxInterval = 0.05,
+        SpamMinInterval = 0.022,
+        SpamMaxInterval = 0.045,
         SpamMinSpeed = 15,
         SpamMinAccel = 120,
         SpamMode = false,
@@ -435,11 +435,12 @@ local function createCombatController()
             and (velocity.Magnitude >= controller.SpamMinSpeed or a.Magnitude >= controller.SpamMinAccel)
         controller.SpamMode = s == true
         if s then
-            local c = playerControl or (gameUI and gameUI.PlayerControl)
-            local w = c and c.Sword
-            if w and w.Cooldown == true then w.Cooldown = false w.Ready = true end
-            local i = math.clamp(0.06 - velocity.Magnitude / 10000, controller.SpamMinInterval, controller.SpamMaxInterval)
-            if now - lastSpam >= i and pressDeflect(true) then
+            local control = playerControl or (gameUI and gameUI.PlayerControl)
+            local sword = control and control.Sword
+            if sword and sword.Cooldown == true then sword.Cooldown = false; sword.Ready = true end
+            local interval = math.clamp(0.055 - velocity.Magnitude / 10000,
+                controller.SpamMinInterval, controller.SpamMaxInterval)
+            if now - lastSpam >= interval and pressDeflect(true) then
                 lastSpam = now
                 lastParry = now
                 parryPending = true
@@ -473,13 +474,11 @@ local function createCombatController()
     local function onAction(_, actionId, payload)
         if controller.Destroyed then return end
         if type(payload) ~= "string" then return end
-        if next(updateIds) and not updateIds[actionId] then
-            local valid = pcall(decodePacket, payload)
-            if not valid then return end
-        end
-        refreshMapOffset()
         local ok, position, velocity = pcall(decodePacket, payload)
         if not ok then return end
+        local previousOffset = mapOffset
+        refreshMapOffset()
+        position += mapOffset - previousOffset
         local now = os.clock()
         if previousPacketVelocity and previousPacketTime then
             local dt = now - previousPacketTime
@@ -654,7 +653,7 @@ local function createCombatController()
                 buttonSearchRunning = false
             end)
         end
-        if type(getnilinstances) == "function" and now - lastRemoteRefresh >= 5 then
+        if type(getnilinstances) == "function" and now - lastPacketTime > 1 and now - lastRemoteRefresh >= 5 then
             lastRemoteRefresh = now
             pcall(function()
                 for _, object in ipairs(getnilinstances()) do addActionRemote(object) end
