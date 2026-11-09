@@ -341,56 +341,36 @@ do
         end
     end
 
-    local selected, channel, original, wrapper, resultConnection
-    local generation, lastReplacement = 0, -math.huge
+    local selected, channel, original, wrapper
+    local generation = 0
 
     local function changeSound(value)
         generation = generation + 1
         local token = generation
         selected = sources[value]
-        if resultConnection then resultConnection:Disconnect(); resultConnection = nil end
         if channel and channel.PlayAt == wrapper then channel.PlayAt = original end
         channel, original, wrapper = nil, nil, nil
-        lastReplacement = -math.huge
         if not selected or not v.Alive then return end
 
         task.spawn(function()
             local ok, failure = PrimeRuntime.Protect(function()
                 local core = ReplicatedFirst:FindFirstChild("Core")
                 local audio = PrimeRuntime.Require(core and core:FindFirstChild("Audio"))
-                local actions = PrimeRuntime.Require(ReplicatedStorage:FindFirstChild("Actions"))
                 if token ~= generation or not v.Alive then return end
                 local gameplay, replacement = audio.Gameplay, selected
                 local playAt = gameplay.PlayAt
-                local function playReplacement(object, position, ...)
-                    lastReplacement = os.clock()
-                    return playAt(object, replacement, position, ...)
-                end
                 local function replaceImpact(object, source, position, ...)
                     local character = LocalPlayer.Character
                     local key = typeof(source) == "Instance" and source.Name or source
                     if object == gameplay and impactKeys[key] and character and typeof(position) == "Instance"
                         and position:IsDescendantOf(character) then
-                        return playReplacement(object, position, ...)
+                        return playAt(object, replacement, position, ...)
                     end
                     return playAt(object, source, position, ...)
                 end
                 gameplay.PlayAt = replaceImpact
                 channel, original, wrapper = gameplay, playAt, replaceImpact
 
-                resultConnection = actions.DEFLECT_RESULT:Connect(function(failed)
-                    if failed or token ~= generation or not v.Alive then return end
-                    local character = LocalPlayer.Character
-                    local root = character and character:FindFirstChild("HumanoidRootPart")
-                    local confirmedAt = os.clock()
-                    if not root or confirmedAt - lastReplacement < 0.12 then return end
-                    task.delay(0.06, function()
-                        if token == generation and v.Alive and root.Parent == character
-                            and lastReplacement < confirmedAt then
-                            playReplacement(gameplay, root)
-                        end
-                    end)
-                end)
             end)
             if not ok and token == generation then notify(failure) end
         end)
@@ -403,4 +383,70 @@ do
         Callback = changeSound,
     })
     TrackRuntimeCleanup(function() changeSound("Default") end)
+end
+
+do
+    local lighting = game:GetService("Lighting")
+    local faces = {"SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp"}
+    local presets = {
+        Pink = {
+            Color3.fromRGB(255, 175, 218), Color3.fromRGB(143, 88, 135),
+            {151165214, 151165197, 151165224, 151165191, 151165206, 151165227},
+        },
+        Green = {
+            Color3.fromRGB(175, 240, 173), Color3.fromRGB(68, 113, 79),
+            {11941775243, 11941774975, 11941774655, 11941774369, 11941774042, 11941773718},
+        },
+        Red = {
+            Color3.fromRGB(255, 148, 142), Color3.fromRGB(139, 63, 72),
+            {108929045660200, 78646480540009, 90546017435179, 109838453114563, 94190734796082, 126944775797063},
+        },
+    }
+    local sky, fog, parked, watcher
+
+    local function restoreAtmosphere()
+        if watcher then watcher:Disconnect(); watcher = nil end
+        destroy(sky)
+        destroy(fog)
+        sky, fog = nil, nil
+        if parked then
+            for _, object in ipairs(parked:GetChildren()) do object.Parent = lighting end
+            parked:Destroy()
+            parked = nil
+        end
+    end
+
+    local function applyAtmosphere(value)
+        local preset = presets[value]
+        if not v.Alive or not preset then restoreAtmosphere(); return end
+        if not sky then
+            parked = Instance.new("Folder")
+            sky, fog = Instance.new("Sky"), Instance.new("Atmosphere")
+            sky.Name, fog.Name = "DeathBallPresetSky", "DeathBallPresetFog"
+            sky.CelestialBodiesShown = false
+            sky.StarCount = 0
+            fog.Density = 0.28
+            fog.Offset = 0.23
+            fog.Haze = 2.45
+            fog.Glare = 0.08
+            local function park(object)
+                if object ~= sky and object ~= fog and (object:IsA("Sky") or object:IsA("Atmosphere")) then
+                    object.Parent = parked
+                end
+            end
+            for _, object in ipairs(lighting:GetChildren()) do park(object) end
+            watcher = lighting.ChildAdded:Connect(park)
+        end
+        fog.Color, fog.Decay = preset[1], preset[2]
+        for index, property in ipairs(faces) do sky[property] = "rbxassetid://" .. preset[3][index] end
+        sky.Parent, fog.Parent = lighting, lighting
+    end
+
+    Tabs.Visual:AddDropdown("VisualAtmosphere", {
+        Title = "Atmosphere",
+        Values = {"Default", "Pink", "Green", "Red"},
+        Default = "Default",
+        Callback = applyAtmosphere,
+    })
+    TrackRuntimeCleanup(restoreAtmosphere)
 end
