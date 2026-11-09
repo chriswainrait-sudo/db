@@ -1,7 +1,7 @@
 local combat, buildingCombat
 local combatStarting, combatClosed = false, false
 local parryEnabled, spamEnabled = false, false
-local trailEnabled = false
+local trailEnabled, abilityEnabled = false, false
 local trailFolder, trailPosition, trailTime
 local trailSegments = {}
 
@@ -374,6 +374,39 @@ local function createCombatController()
         return false
     end
 
+    local abilityHelpers, championData
+    local abilityLoading, abilityUsed = false, false
+
+    local function prepareAbility()
+        if abilityLoading or (abilityHelpers and championData) then return end
+        abilityLoading = true
+        task.spawn(function()
+            local ok, helpers, champions = pcall(function()
+                return PrimeRuntime.Require(ReplicatedFirst:FindFirstChild("Helpers")),
+                    PrimeRuntime.Require(ReplicatedStorage.DataBins:FindFirstChild("ChampionData"))
+            end)
+            if ok and not controller.Destroyed then abilityHelpers, championData = helpers, champions end
+            abilityLoading = false
+        end)
+    end
+
+    local function tryAbility(control)
+        local handler = control and control.Ability
+        if not handler or handler.UsingAbility or handler.unresolvedAbilityRequest or not abilityHelpers then return false end
+        local champion, equipped = abilityHelpers.GetEquippedChampionInfo(handler.Inventory)
+        local data = champion and championData[champion]
+        if not data or not equipped or not equipped.Abilities then return false end
+        for slot = 1, 4 do
+            local choices = data.Abilities[slot]
+            local name = choices and choices[equipped.Abilities[slot]]
+            if name and not handler.Cooldowns[name] and handler:CanUse(name) then
+                handler:Use(name)
+                return true
+            end
+        end
+        return false
+    end
+
     local function tryParry(now, position, velocity, acceleration)
         if controller.Destroyed or not controller.Enabled then controller.SpamMode = false return end
         local ok, active = pcall(function() return Values.PLAYER_ACTIVE_STATE:Get() end)
@@ -384,6 +417,18 @@ local function createCombatController()
         if not humanoid or humanoid.Health <= 0 or not root then controller.SpamMode = false return end
         local a = acceleration or Vector3.zero
         local d = (position - root.Position).Magnitude
+        local incoming = shouldParry(now, position, velocity, a, root)
+        if not incoming then abilityUsed = false end
+        if abilityEnabled and incoming and not abilityUsed then
+            local control = playerControl or (gameUI and gameUI.PlayerControl)
+            local sword = control and control.Sword
+            local onCooldown = sword and sword.Cooldown == true
+                or deflectButton and deflectButton.IsOnCooldown and not deflectButton.OverrideCooldown
+            if onCooldown and abilityHelpers then
+                local ok, used = pcall(tryAbility, control)
+                if ok and used then abilityUsed = true; return end
+            end
+        end
         local md = controller.SpamMode and controller.SpamExitDistance or controller.SpamBallDistance
         local s = controller.AutoSpam and (targeted or now - lastTargetMe <= controller.SpamTargetGrace)
             and d <= md and ne(root, controller.SpamEnemyDistance)
@@ -401,7 +446,7 @@ local function createCombatController()
             end
             return
         end
-        if controller.AutoParry and not parryPending and shouldParry(now, position, velocity, a, root) then
+        if controller.AutoParry and not parryPending and incoming then
             local c = playerControl or (gameUI and gameUI.PlayerControl)
             local w = c and c.Sword
             local cd = w and w.Cooldown == true or deflectButton and deflectButton.IsOnCooldown and not deflectButton.OverrideCooldown
@@ -482,8 +527,9 @@ local function createCombatController()
         if self.Destroyed then return end
         self.AutoParry = parry == true
         self.AutoSpam = self.AutoParry and spam == true
-        self.Enabled = self.AutoParry
-        if not self.Enabled then parryPending = false end
+        self.Enabled = self.AutoParry or abilityEnabled
+        if not self.AutoParry then parryPending = false end
+        if abilityEnabled then prepareAbility() else abilityUsed = false end
         if not self.AutoSpam then self.SpamMode = false end
     end
 
@@ -641,7 +687,7 @@ end
 
 local function stopCombat()
     combatClosed = true
-    trailEnabled = false
+    trailEnabled, abilityEnabled = false, false
     clearBallTrail()
     parryEnabled, spamEnabled = false, false
     if combat then combat:Destroy(); combat = nil end
@@ -651,7 +697,7 @@ end
 local function syncCombat()
     if combatClosed or PrimeRuntime.IsShuttingDown then return end
     if combat then combat:SetFeatures(parryEnabled, spamEnabled); return end
-    if combatStarting or not (parryEnabled or trailEnabled) then return end
+    if combatStarting or not (parryEnabled or trailEnabled or abilityEnabled) then return end
     combatStarting = true
     task.spawn(function()
         local ok, result = pcall(createCombatController)
@@ -662,7 +708,7 @@ local function syncCombat()
             buildingCombat = nil
             parryEnabled, spamEnabled = false, false
             warn("[DeathBall] AutoParry / AutoSpam: " .. tostring(result))
-            for _, id in ipairs({"autoparry", "AutoSpam", "BallTrajectory"}) do
+            for _, id in ipairs({"autoparry", "AutoSpam", "BallTrajectory", "AutoAbility"}) do
                 local option = Options[id]
                 if option and option.SetValue then pcall(function() option:SetValue(false) end) end
             end
@@ -720,6 +766,16 @@ Tabs.Main:AddToggle("BallTrajectory", {
     Callback = function(value)
         trailEnabled = value == true and not combatClosed
         if not trailEnabled then clearBallTrail() end
+        syncCombat()
+    end,
+})
+
+Tabs.Main:AddToggle("AutoAbility", {
+    Title = "Auto Ability",
+    Description = "Use a ready equipped ability when an incoming ball is in parry range and parry is on cooldown",
+    Default = false,
+    Callback = function(value)
+        abilityEnabled = value == true and not combatClosed
         syncCombat()
     end,
 })
