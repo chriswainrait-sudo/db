@@ -1,6 +1,43 @@
 local combat, buildingCombat
 local combatStarting, combatClosed = false, false
 local parryEnabled, spamEnabled = false, false
+local trailEnabled = false
+local trailFolder, trailPosition, trailTime
+local trailSegments = {}
+
+local function clearBallTrail()
+    if trailFolder then trailFolder:Destroy(); trailFolder = nil end
+    table.clear(trailSegments)
+    trailPosition, trailTime = nil, nil
+end
+
+local function addBallTrailPoint(position, now)
+    if not trailEnabled then return end
+    if trailTime and now - trailTime < 0.035 then return end
+    if trailTime and now - trailTime > 0.4 then clearBallTrail() end
+    local previous = trailPosition
+    trailPosition, trailTime = position, now
+    if not previous then return end
+    local distance = (position - previous).Magnitude
+    if distance < 0.15 or distance > 100 then return end
+    if not trailFolder then
+        trailFolder = Instance.new("Folder")
+        trailFolder.Name = "DeathBallTrajectory"
+        trailFolder.Parent = Workspace
+    end
+    local segment = Instance.new("Part")
+    segment.Anchored, segment.CanCollide, segment.CanTouch, segment.CanQuery = true, false, false, false
+    segment.CastShadow = false
+    segment.Material = Enum.Material.Neon
+    segment.Color = Color3.fromRGB(86, 221, 255)
+    segment.Transparency = 0.22
+    segment.Size = Vector3.new(0.12, 0.12, distance)
+    segment.CFrame = CFrame.lookAt((position + previous) / 2, position)
+    segment.Parent = trailFolder
+    table.insert(trailSegments, segment)
+    if #trailSegments > 32 then table.remove(trailSegments, 1):Destroy() end
+end
+
 local combatEnv = getgenv and getgenv() or _G
 local function createCombatController()
     local env = combatEnv
@@ -417,6 +454,7 @@ local function createCombatController()
         packetPosition = position
         packetVelocity = velocity
         lastPacketTime = now
+        if updateIds[actionId] or #payload == 27 then addBallTrailPoint(position, now) end
         local character = player.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
         if parryPending and root then
@@ -500,7 +538,7 @@ local function createCombatController()
                     local n = os.clock()
                     lastTargetMe = n
                     targetAimTime = n
-                    if packetPosition and packetVelocity then
+                    if controller.Enabled and packetPosition and packetVelocity then
                         local q, v = rawPredict(n)
                         targetAimPosition = q
                         targetAimSpeed = v.Magnitude
@@ -557,10 +595,12 @@ local function createCombatController()
     end)
 
     addConnection(RunService.Heartbeat:Connect(function()
-        if controller.Destroyed or not controller.Enabled then return end
+        if controller.Destroyed then return end
         local now = os.clock()
-        updatePing(now)
-        if not buttonSearchRunning and now - lastButtonSearch >= 2 then
+        if trailTime and now - trailTime > 0.65 then clearBallTrail() end
+        if not controller.Enabled and not trailEnabled then return end
+        if controller.Enabled then updatePing(now) end
+        if controller.Enabled and not buttonSearchRunning and now - lastButtonSearch >= 2 then
             lastButtonSearch = now
             buttonSearchRunning = true
             task.spawn(function()
@@ -574,7 +614,7 @@ local function createCombatController()
                 for _, object in ipairs(getnilinstances()) do addActionRemote(object) end
             end)
         end
-        if packetPosition and packetVelocity then
+        if controller.Enabled and packetPosition and packetVelocity then
             local age = now - lastPacketTime
             local maxAge = targeted and controller.MaxPacketAge or math.min(controller.MaxPacketAge, 0.55)
             if age <= maxAge then
@@ -601,6 +641,8 @@ end
 
 local function stopCombat()
     combatClosed = true
+    trailEnabled = false
+    clearBallTrail()
     parryEnabled, spamEnabled = false, false
     if combat then combat:Destroy(); combat = nil end
     if buildingCombat then buildingCombat:Destroy(); buildingCombat = nil end
@@ -609,7 +651,7 @@ end
 local function syncCombat()
     if combatClosed or PrimeRuntime.IsShuttingDown then return end
     if combat then combat:SetFeatures(parryEnabled, spamEnabled); return end
-    if combatStarting or not parryEnabled then return end
+    if combatStarting or not (parryEnabled or trailEnabled) then return end
     combatStarting = true
     task.spawn(function()
         local ok, result = pcall(createCombatController)
@@ -620,7 +662,7 @@ local function syncCombat()
             buildingCombat = nil
             parryEnabled, spamEnabled = false, false
             warn("[DeathBall] AutoParry / AutoSpam: " .. tostring(result))
-            for _, id in ipairs({"autoparry", "AutoSpam"}) do
+            for _, id in ipairs({"autoparry", "AutoSpam", "BallTrajectory"}) do
                 local option = Options[id]
                 if option and option.SetValue then pcall(function() option:SetValue(false) end) end
             end
@@ -670,5 +712,16 @@ Tabs.Main:AddToggle("AutoSpam", {
 })
 Options.AutoSpam:SetDisabled(not parryEnabled)
 
+
+Tabs.Main:AddToggle("BallTrajectory", {
+    Title = "Ball Trajectory",
+    Description = "Show the recent path of the ball",
+    Default = false,
+    Callback = function(value)
+        trailEnabled = value == true and not combatClosed
+        if not trailEnabled then clearBallTrail() end
+        syncCombat()
+    end,
+})
 
 TrackRuntimeCleanup(stopCombat)
