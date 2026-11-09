@@ -1,4 +1,4 @@
-local v = {Alive = true, Choice = {}, Epoch = {}, Effects = {}, Deaths = setmetatable({}, {__mode = "k"})}
+local v = {Alive = true, Choice = {}}
 local assets = ReplicatedStorage:WaitForChild("Assets", 10)
 local bins = ReplicatedStorage:WaitForChild("DataBins", 10)
 local scripts = LocalPlayer:WaitForChild("PlayerScripts", 10)
@@ -15,19 +15,10 @@ local function notify(failure)
     if v.Alive then NexusUI:Notify({Title = "Visual", Content = tostring(failure), Duration = 5}) end
 end
 local function clear(kind)
-    v.Epoch[kind] = (v.Epoch[kind] or 0) + 1
     local state = v[kind]
     v[kind] = nil
     if not state then return end
     destroy(state.Connection)
-    if state.Native then
-        state.Native.Destroy, state.Native.StageToken = nil, nil
-        for _, cached in pairs(state.Native.SwordVFXCache) do destroy(cached) end
-        table.clear(state.Native.SwordVFXCache)
-    end
-    destroy(state.SwordConnection)
-    destroy(state.Swords)
-    if state.StopPose then pcall(state.StopPose); state.Track = nil end
     if state.Track then pcall(state.Track.Stop, state.Track, 0.1); destroy(state.Track) end
     destroy(state.Animation)
     destroy(state.Effect)
@@ -111,146 +102,39 @@ local function pose(state, id)
     local animator = humanoid and humanoid:WaitForChild("Animator", 10)
     if not current("Pose", state) then return end
     assert(animator, "Character animator is unavailable")
-    local function findPage(root)
-        local pages = root and root:FindFirstChild("PAGES")
-        local page = pages and pages:FindFirstChild("InventoryPreviewPage")
-        local content = page and page:FindFirstChild("Content")
-        return content and content:FindFirstChild("InventoryPreviewPage")
-    end
-    local module = findPage(LocalPlayer:FindFirstChildOfClass("PlayerGui")) or findPage(ReplicatedStorage:FindFirstChild("StarterGuiCache"))
-    local class = PrimeRuntime.Require(module)
-    if not current("Pose", state) then return end
-    local context = {
-        Categories = {Swords = {Config = {EquippedKey = "EquippedSwords"}}},
-        SwordVFXCache = {}, SwordVFXOrder = {}, maid = {}, StageToken = {}, Destroy = function() end,
-        GetEquippedSword = class.GetEquippedSword, GetCachedSwordVFX = class.GetCachedSwordVFX
-    }
-    state.Native = context
-    local visible = false
-    local function visibility(show)
-        visible = show
-        if state.Swords then
-            for _, object in ipairs(state.Swords:GetDescendants()) do
-                if object:IsA("BasePart") and object.Name ~= "rtool" and object.Name ~= "ltool" then
-                    object.LocalTransparencyModifier = show and 0 or 1
-                elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then
-                    if object:GetAttribute("PRIME_PoseEnabled") == nil then object:SetAttribute("PRIME_PoseEnabled", object.Enabled) end
-                    object.Enabled = show and object:GetAttribute("PRIME_PoseEnabled") or false
-                end
-            end
-        end
-        for object, properties in pairs(state.Hidden) do
-            if object.Parent then for property, value in pairs(properties) do object[property] = show and 1 or value end end
-        end
-    end
-    function context:GetSwordVFXAsync(typeId, alive)
+    local data = itemData[id]
+    local animationId = data and data.UsageData and tostring(data.UsageData[1]):match("%d+")
+    assert(animationId, "Pose animation is unavailable")
+
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://" .. animationId
+    state.Animation = animation
+    local track = animator:LoadAnimation(animation)
+    state.Track = track
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = true
+
+    state.Connection = RunService.PreAnimation:Connect(function()
         if not current("Pose", state) then return end
-        local result = class.GetSwordVFXAsync(self, typeId, function() return current("Pose", state) and alive() end)
-        if current("Pose", state) then return result end
-    end
-    function context:PlayPose(rig, poseId)
-        local before = {}
-        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do before[track] = true end
-        local stop = class.PlayPose(self, rig, poseId)
-        if not current("Pose", state) then if stop then stop() end return function() end end
-        state.StopPose = stop
-        local data = itemData[poseId]
-        local animationId = data and data.UsageData and data.UsageData[1]
-        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-            if not before[track] and track.Animation and track.Animation.AnimationId:match("%d+$") == tostring(animationId) then
-                state.Track = track; track:Stop(0); break
-            end
-        end
-        assert(state.Track, "Native pose did not create an animation track")
-        return stop
-    end
-    function context:HoldSwordAsync(_, data)
-        local token = {}
-        state.SwordToken = token
-        visibility(false)
-        destroy(state.SwordConnection)
-        destroy(state.Swords)
-        local model = Instance.new("Model")
-        model.Name, state.Swords = "PRIME_PoseSwords", model
-        for _, name in ipairs({"rtool", "ltool"}) do
-            local tool = character:FindFirstChild(name)
-            if tool and tool:IsA("BasePart") then
-                local part = Instance.new("Part")
-                part.Name, part.Size, part.CFrame = name, tool.Size, tool.CFrame
-                part.Transparency, part.CanCollide, part.CanTouch, part.CanQuery, part.Massless = 1, false, false, false, true
-                part.Parent = model
-                local weld = Instance.new("WeldConstraint")
-                weld.Part0, weld.Part1, weld.Parent = tool, part, part
-            end
-        end
-        state.SwordConnection = model.DescendantAdded:Connect(function(object)
-            if object:IsA("BasePart") then
-                object.CanCollide, object.CanTouch, object.CanQuery = false, false, false
-                object.LocalTransparencyModifier = visible and 0 or 1
-            elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then
-                object:SetAttribute("PRIME_PoseEnabled", object.Enabled)
-                object.Enabled = visible and object.Enabled or false
-            end
-        end)
-        model.Parent = character
-        local ok, failure = PrimeRuntime.Protect(class.HoldSwordAsync, self, model, data)
-        if not current("Pose", state) or state.SwordToken ~= token then destroy(model); return end
-        if not ok then destroy(model); state.Swords = nil; notify(failure); return end
-        local attached = false
-        for _, child in ipairs(model:GetChildren()) do
-            if child:IsA("BasePart") and child.Name ~= "rtool" and child.Name ~= "ltool" then attached = true end
-        end
-        if attached then
-            for _, joint in ipairs(character:GetDescendants()) do
-                if (joint:IsA("Weld") or joint:IsA("WeldConstraint")) and not joint:IsDescendantOf(model) then
-                    local p0, p1 = joint.Part0, joint.Part1
-                    local sword = p0 and (p0.Name == "rtool" or p0.Name == "ltool") and p1
-                        or p1 and (p1.Name == "rtool" or p1.Name == "ltool") and p0
-                    if sword and sword:IsDescendantOf(character) then
-                        hide(state, sword)
-                        for _, child in ipairs(sword:GetDescendants()) do hide(state, child) end
-                    end
-                end
-            end
-        end
-        for _, object in ipairs(model:GetDescendants()) do
-            if object:IsA("BasePart") then object.CanCollide, object.CanTouch, object.CanQuery = false, false, false end
-        end
-        visibility(visible)
-    end
-    class.ArmRig(context, character, id)
-    if not current("Pose", state) then return end
-    local _, sword = context:GetEquippedSword()
-    local function signature(data)
-        if not data then return "" end
-        return table.concat({tostring(data.Type), tostring(data.DualWieldId), tostring(data.DualWieldMutation), tostring(data.TextureId), tostring(data.Ascend)}, ":")
-    end
-    local swordSignature, elapsed = signature(sword), 0
-    state.Connection = RunService.PreAnimation:Connect(function(dt)
-        if not current("Pose", state) then return end
-        elapsed = elapsed + (dt or 0)
-        if elapsed >= 0.5 then
-            elapsed = 0
-            local _, data = context:GetEquippedSword()
-            local nextSignature = signature(data)
-            if swordSignature ~= nextSignature then
-                swordSignature = nextSignature
-                if data then task.spawn(context.HoldSwordAsync, context, character, data)
-                else visibility(false); destroy(state.Swords); state.Swords = nil end
-            end
-        end
         local root = character:FindFirstChild("HumanoidRootPart")
-        local idle = root and humanoid.Health > 0 and not humanoid.Sit and humanoid.MoveDirection.Magnitude < 0.05
-            and root.AssemblyLinearVelocity.Magnitude < 2 and humanoid.FloorMaterial ~= Enum.Material.Air
+        local velocity = root and root.AssemblyLinearVelocity
+        local idle = velocity and humanoid.Health > 0 and not humanoid.Sit
+            and humanoid.MoveDirection.Magnitude < 0.05
+            and Vector3.new(velocity.X, 0, velocity.Z).Magnitude < 2
+            and humanoid.FloorMaterial ~= Enum.Material.Air
             and not LocalPlayer:GetAttribute("isDeflecting") and not character:GetAttribute("isDeflecting")
         if idle then
             for _, other in ipairs(animator:GetPlayingAnimationTracks()) do
-                if other ~= state.Track and other.IsPlaying and other.Priority.Value >= Enum.AnimationPriority.Action.Value then idle = false; break end
+                local priority = other.Priority
+                if other ~= track and priority ~= Enum.AnimationPriority.Core
+                    and priority.Value >= Enum.AnimationPriority.Action.Value then
+                    idle = false
+                    break
+                end
             end
         end
-        if idle and not state.Track.IsPlaying then state.Track:Play(0.15)
-        elseif not idle and state.Track.IsPlaying then state.Track:Stop(0.1) end
-        if visible ~= idle then visibility(idle) end
+        if idle and not track.IsPlaying then track:Play(0.15)
+        elseif not idle and track.IsPlaying then track:Stop(0.1) end
     end)
 end
 
@@ -284,46 +168,35 @@ local function mine(source)
     local character = LocalPlayer.Character
     return character ~= nil and source ~= nil and characterOf(source) == character
 end
-local function explosion(id, position, source, target)
-    source, target = characterOf(source), characterOf(target)
-    if not source or not target or typeof(position) ~= "Vector3" then return end
-    local previous = v.Deaths[target]
-    if previous and os.clock() - previous < 0.4 then return end
-    v.Deaths[target] = os.clock()
-    task.spawn(function()
-        local ok, failure = PrimeRuntime.Protect(function()
-            local class = PrimeRuntime.Require(moduleAt("LocalDeathExplosions", "BaseExplosion", id))
-            if not v.Alive or v.Choice.Explosion ~= id then return end
-            local effect = class(position, source, target, id)
-            if not v.Alive then destroy(effect); return end
-            v.Effects[effect] = true
-            task.delay(15, function()
-                if v.Effects[effect] then v.Effects[effect] = nil; destroy(effect) end
-            end)
-        end)
-        if not ok then v.Deaths[target] = nil; notify(failure) end
-    end)
-end
-local deathHandler, originalDeath, deathWrapper, deathConnection
+local deathHandler, originalDeath, deathWrapper
 local function bindDeath()
     if deathWrapper then return end
-    local handler = scripts:FindFirstChild("LocalDeathExplosions")
-    handler = handler and handler:FindFirstChild("DeathExplosionHandler")
-    local result = PrimeRuntime.Require(handler)
-    local actions = PrimeRuntime.Require(ReplicatedStorage:WaitForChild("Actions", 10))
+    local handler = scripts:WaitForChild("LocalDeathExplosions", 10)
+    local module = handler and handler:WaitForChild("DeathExplosionHandler", 5)
+    local result = PrimeRuntime.Require(module)
+    local deferred = ReplicatedFirst:FindFirstChild("DeferredContent")
+    local moduleArt = deferred and deferred:FindFirstChild("ModuleArt")
+    local art = moduleArt and PrimeRuntime.Require(moduleArt)
     if not v.Alive or deathWrapper then return end
-    deathHandler, originalDeath = result, result.Play
-    deathWrapper = function(object, id, position, source, target, ...)
-        if v.Alive and v.Choice.Explosion and mine(source) then
-            explosion(v.Choice.Explosion, position, source, target)
-            return
+    local playForSettings, play = result.PlayForSettings, result.Play
+    local base = handler:FindFirstChild("BaseExplosion")
+    assert(type(playForSettings) == "function" and type(play) == "function", "Death explosion handler is unavailable")
+
+    local function wrapper(object, id, position, source, target, ...)
+        local selected = v.Choice.Explosion
+        local effect = selected and base and base:FindFirstChild(selected)
+        if v.Alive and effect and mine(source) then
+            local pending = art and art.IsPending(effect)
+            local effectId = pending and id or selected
+            local ok, failure = PrimeRuntime.Protect(play, object, effectId, position, characterOf(source), characterOf(target))
+            if ok then return end
+            notify(failure)
         end
-        return originalDeath(object, id, position, source, target, ...)
+        return playForSettings(object, id, position, source, target, ...)
     end
-    deathHandler.Play = deathWrapper
-    deathConnection = actions.DEATH_EXPLOSION_PLAY:Connect(function(_, position, source, target)
-        if v.Alive and v.Choice.Explosion and mine(source) then explosion(v.Choice.Explosion, position, source, target) end
-    end)
+
+    result.PlayForSettings = wrapper
+    deathHandler, originalDeath, deathWrapper = result, playForSettings, wrapper
 end
 local definitions = {{"Skin", "Skin Changer"}, {"Aura", "Aura Changer"}, {"Pose", "Pose Changer"}, {"Explosion", "Death Explosion Changer"}}
 local maps = {}
@@ -366,11 +239,6 @@ for _, entry in ipairs(definitions) do
         end
     end})
 end
-Tabs.Visual:AddButton({Title = "Preview Death Explosion", Callback = function()
-    local character, id = LocalPlayer.Character, v.Choice.Explosion
-    local root = character and character:FindFirstChild("HumanoidRootPart")
-    if v.Alive and id and root then explosion(id, root.Position, character, character) end
-end})
 TrackRuntimeConnection(LocalPlayer.CharacterRemoving:Connect(function()
     for _, kind in ipairs({"Skin", "Pose", "Aura"}) do clear(kind) end
 end))
@@ -383,8 +251,7 @@ end))
 TrackRuntimeCleanup(function()
     v.Alive = false
     for _, kind in ipairs({"Skin", "Pose", "Aura"}) do clear(kind) end
-    destroy(deathConnection)
-    if deathHandler and deathHandler.Play == deathWrapper then deathHandler.Play = originalDeath end
-    for effect in pairs(v.Effects) do destroy(effect) end
-    table.clear(v.Effects)
+    if deathHandler and deathHandler.PlayForSettings == deathWrapper then
+        deathHandler.PlayForSettings = originalDeath
+    end
 end)
