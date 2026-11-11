@@ -4317,6 +4317,7 @@ function NexusUI:CreateWindow(options)
     end
 
     local mobileRestoreFrame, mobileFoldTween
+    local savedCompactPosition
     local compactSize = UDim2.fromOffset(64, 34)
 
     local function compactPosition(position)
@@ -4446,6 +4447,7 @@ function NexusUI:CreateWindow(options)
                 restoreStartPos.Y.Offset + delta.Y
             )
             restoreFrame.Position = useCompactRestore and compactPosition(position) or position
+            if useCompactRestore then savedCompactPosition = restoreFrame.Position end
         end
 
         local function endRestoreInteraction(input)
@@ -4651,44 +4653,44 @@ function NexusUI:CreateWindow(options)
 
     local function setMobileVisible(visible)
         local wasVisible = mainFrame.Visible and screenGui.Enabled
-        if visible and wasVisible then return end
         local gui = createRestoreGui()
         local frame = mobileRestoreFrame
         if not gui or not frame then return end
-        if not visible and not wasVisible and mobileFoldTween == nil then
+        if visible then
+            cancelMobileFold()
+            local windowScale = mainFrame:FindFirstChild("NexusWindowScale")
+            if windowScale then windowScale.Scale = targetScale end
+            mainFrame.BackgroundTransparency = MAIN_WINDOW_TRANSPARENCY
+            screenGui.Enabled = true
+            mainFrame.Visible = true
+            gui.Enabled = false
+            frame.Size = compactSize
+            if savedCompactPosition then frame.Position = compactPosition(savedCompactPosition) end
+            return
+        end
+        if not wasVisible and mobileFoldTween == nil then
+            if savedCompactPosition then frame.Position = compactPosition(savedCompactPosition) end
             gui.Enabled = true
             return
         end
 
-        gui.Enabled = true
         cancelMobileFold()
-        local origin = mainFrame.AbsolutePosition - restoreGui.AbsolutePosition
+        local origin = mainFrame.AbsolutePosition - gui.AbsolutePosition
         local fullPosition = UDim2.fromOffset(origin.X, origin.Y)
-        local fullSize = UDim2.fromOffset(mainFrame.AbsoluteSize.X, mainFrame.AbsoluteSize.Y)
-        local smallPosition = compactPosition(fullPosition)
-        if not visible and wasVisible then
-            frame.Position = fullPosition
-            frame.Size = fullSize
-            mainFrame.Visible = false
-        end
+        local smallPosition = compactPosition(savedCompactPosition or fullPosition)
+        savedCompactPosition = smallPosition
+        frame.Position = fullPosition
+        frame.Size = UDim2.fromOffset(mainFrame.AbsoluteSize.X, mainFrame.AbsoluteSize.Y)
+        gui.Enabled = true
+        mainFrame.Visible = false
 
         local tween = TweenService:Create(frame, TweenInfo.new(0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-            Size = visible and fullSize or compactSize,
-            Position = visible and fullPosition or smallPosition,
+            Size = compactSize,
+            Position = smallPosition,
         })
         mobileFoldTween = tween
-        tween.Completed:Once(function(state)
-            if mobileFoldTween ~= tween then return end
-            mobileFoldTween = nil
-            if state ~= Enum.PlaybackState.Completed or not mainFrame.Parent then return end
-            if visible then
-                screenGui.Enabled = true
-                mainFrame.Visible = true
-                restoreGui.Enabled = false
-                frame.Size = compactSize
-                frame.Position = smallPosition
-                animateWindowIn()
-            end
+        tween.Completed:Once(function()
+            if mobileFoldTween == tween then mobileFoldTween = nil end
         end)
         tween:Play()
     end
