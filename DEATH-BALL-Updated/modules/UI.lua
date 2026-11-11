@@ -4317,14 +4317,14 @@ function NexusUI:CreateWindow(options)
     end
 
     local mobileRestoreFrame, mobileFoldTween
-    local compactSize = UDim2.fromOffset(174, 38)
+    local compactSize = UDim2.fromOffset(64, 34)
 
     local function compactPosition(position)
         local bounds = restoreGui.AbsoluteSize
         if bounds.X <= 0 or bounds.Y <= 0 then return position end
         return UDim2.fromOffset(
-            math.clamp(position.X.Offset, 8, math.max(8, bounds.X - compactSize.X.Offset - 8)),
-            math.clamp(position.Y.Offset, 8, math.max(8, bounds.Y - compactSize.Y.Offset - 8))
+            math.clamp(position.X.Scale * bounds.X + position.X.Offset, 0, math.max(0, bounds.X - compactSize.X.Offset)),
+            math.clamp(position.Y.Scale * bounds.Y + position.Y.Offset, 0, math.max(0, bounds.Y - compactSize.Y.Offset))
         )
     end
 
@@ -4342,7 +4342,10 @@ function NexusUI:CreateWindow(options)
         restoreGui.ResetOnSpawn = false
         restoreGui.IgnoreGuiInset = true
         if useCompactRestore then
-            restoreGui.IgnoreGuiInset = screenGui.IgnoreGuiInset
+            pcall(function()
+                restoreGui.ScreenInsets = Enum.ScreenInsets.None
+                restoreGui.ClipToDeviceSafeArea = false
+            end)
             restoreGui.DisplayOrder = screenGui.DisplayOrder + 1
         end
         restoreGui.Enabled = false
@@ -4364,26 +4367,35 @@ function NexusUI:CreateWindow(options)
             restoreFrame.Size = compactSize
             restoreFrame.AnchorPoint = Vector2.zero
             restoreFrame.Position = UDim2.fromOffset(16, 48)
-            restoreFrame.BackgroundTransparency = 0.08
+            restoreFrame.BackgroundColor3 = mainFrame.BackgroundColor3
+            restoreFrame.BackgroundTransparency = mainFrame.BackgroundTransparency
             restoreFrame.ClipsDescendants = true
-            NexusUI:BindColor(restoreFrame, "BackgroundColor3", function() return COLOR_WINDOW end)
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(0, 7)
-            corner.Parent = restoreFrame
-            local stroke = Instance.new("UIStroke")
-            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-            NexusUI:BindColor(stroke, "Color", function() return COLOR_BORDER end)
-            stroke.Parent = restoreFrame
+            windowGradient().Parent = restoreFrame
+            mainCorner:Clone().Parent = restoreFrame
+            mainStroke:Clone().Parent = restoreFrame
+            createImageBackground(restoreFrame)
+
+            local logo = makeLogo(restoreFrame, 24)
+            logo.Name = "CompactSpinningLogo"
+            logo.AnchorPoint = Vector2.new(0.5, 0.5)
+            logo.Position = UDim2.fromScale(0.5, 0.5)
+            logo.ZIndex = 4
+            logo.Active = false
+            local spin = TweenService:Create(logo, TweenInfo.new(8, Enum.EasingStyle.Linear,
+                Enum.EasingDirection.InOut, -1), {Rotation = 360})
+            spin:Play()
+            track(restoreGui:GetPropertyChangedSignal("Enabled"):Connect(function()
+                if restoreGui.Enabled then spin:Play() else spin:Pause() end
+            end))
+            track(restoreFrame.Destroying:Connect(function() spin:Cancel() end))
 
             restoreButton = Instance.new("TextButton")
             restoreButton.Name = "ExpandWindow"
             restoreButton.Size = UDim2.fromScale(1, 1)
             restoreButton.BackgroundTransparency = 1
             restoreButton.AutoButtonColor = false
-            restoreButton.Text = "L I Q U I D A T I O N    +"
-            restoreButton.Font = Enum.Font.GothamMedium
-            restoreButton.TextSize = 12
-            NexusUI:BindColor(restoreButton, "TextColor3", function() return COLOR_TEXT end)
+            restoreButton.Text = ""
+            restoreButton.ZIndex = 5
             restoreButton.Parent = restoreFrame
         else
             restoreButton = makeLogo(restoreFrame,48)
@@ -4650,8 +4662,9 @@ function NexusUI:CreateWindow(options)
 
         gui.Enabled = true
         cancelMobileFold()
-        local fullPosition = mainFrame.Position
-        local fullSize = UDim2.fromOffset(mainFrame.Size.X.Offset * targetScale, mainFrame.Size.Y.Offset * targetScale)
+        local origin = mainFrame.AbsolutePosition - restoreGui.AbsolutePosition
+        local fullPosition = UDim2.fromOffset(origin.X, origin.Y)
+        local fullSize = UDim2.fromOffset(mainFrame.AbsoluteSize.X, mainFrame.AbsoluteSize.Y)
         local smallPosition = compactPosition(fullPosition)
         if not visible and wasVisible then
             frame.Position = fullPosition
