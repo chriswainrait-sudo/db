@@ -6254,12 +6254,6 @@ Window = NexusUI:CreateWindow({
     MinimizeKey = Enum.KeyCode.LeftAlt
 })
 
-StarterGui:SetCore("SendNotification", {
-    Title = "PRIME Loaded",
-    Text = "PRIME Loaded Successfully!",
-    Duration = 4,
-    Button1 = "OK"
-})
 
 Tabs = {
     Main = Window:AddTab({Title = "Main"}),
